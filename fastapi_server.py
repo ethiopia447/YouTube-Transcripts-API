@@ -5,8 +5,34 @@ from typing import List, Optional
 from contextlib import asynccontextmanager
 import asyncio
 import time
+import os
+import json
 from async_transcript_service import AsyncTranscriptService, TranscriptResult
 from transcript_utils import get_transcripts_with_retry
+
+# Get configuration from environment variables with defaults
+API_HOST = os.getenv('API_HOST', '0.0.0.0')
+API_PORT = int(os.getenv('API_PORT', '5681'))
+API_WORKERS = int(os.getenv('API_WORKERS', '4'))
+API_RELOAD = os.getenv('API_RELOAD', 'true').lower() == 'true'
+
+# Rate limiting configuration
+MAX_WORKERS = int(os.getenv('MAX_WORKERS', '30'))
+INITIAL_RATE = int(os.getenv('INITIAL_RATE', '30'))
+MIN_RATE = int(os.getenv('MIN_RATE', '5'))
+MAX_RATE = int(os.getenv('MAX_RATE', '50'))
+BACKOFF_FACTOR = float(os.getenv('BACKOFF_FACTOR', '1.5'))
+RECOVERY_FACTOR = float(os.getenv('RECOVERY_FACTOR', '0.8'))
+MAX_CONSECUTIVE_FAILURES = int(os.getenv('MAX_CONSECUTIVE_FAILURES', '5'))
+
+# CORS configuration
+CORS_ORIGINS = json.loads(os.getenv('CORS_ORIGINS', '["*"]'))
+CORS_METHODS = json.loads(os.getenv('CORS_METHODS', '["*"]'))
+CORS_HEADERS = json.loads(os.getenv('CORS_HEADERS', '["*"]'))
+
+# Logging configuration
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'info')
+ENABLE_ACCESS_LOG = os.getenv('ENABLE_ACCESS_LOG', 'true').lower() == 'true'
 
 # Global transcript service
 transcript_service = None
@@ -15,14 +41,15 @@ transcript_service = None
 async def lifespan(app: FastAPI):
     # Startup
     global transcript_service
-    # Initialize with adaptive rate limiting
+    # Initialize with adaptive rate limiting using environment variables
     transcript_service = AsyncTranscriptService(
-        max_workers=30,
-        initial_rate=30,
-        min_rate=5,
-        max_rate=50
+        max_workers=MAX_WORKERS,
+        initial_rate=INITIAL_RATE,
+        min_rate=MIN_RATE,
+        max_rate=MAX_RATE
     )
-    print("🚀 Transcript service initialized with adaptive rate limiting")
+    print(f"🚀 Transcript service initialized with adaptive rate limiting")
+    print(f"Configuration: workers={MAX_WORKERS}, rate={INITIAL_RATE}-{MAX_RATE}")
     yield
     # Shutdown
     if transcript_service:
@@ -41,10 +68,10 @@ app = FastAPI(
 # CORS middleware for web access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure this for production
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=CORS_METHODS,
+    allow_headers=CORS_HEADERS,
 )
 
 # Pydantic models for API
@@ -312,14 +339,21 @@ async def get_rate_limiter_stats():
 if __name__ == "__main__":
     import uvicorn
     print("Starting YouTube Transcript API...")
-    print("API will be available at: http://localhost:5681")
-    print("Interactive docs: http://localhost:5681/docs")
-    print("ReDoc: http://localhost:5681/redoc")
-    print("\nTo enable auto-reload, use:")
-    print("uvicorn fastapi_server:app --reload --host 0.0.0.0 --port 5681")
+    print(f"API will be available at: http://{API_HOST}:{API_PORT}")
+    print(f"Interactive docs: http://{API_HOST}:{API_PORT}/docs")
+    print(f"ReDoc: http://{API_HOST}:{API_PORT}/redoc")
+    print("\nConfiguration:")
+    print(f"- Workers: {API_WORKERS}")
+    print(f"- Rate Limit: {INITIAL_RATE}-{MAX_RATE} requests/minute")
+    print(f"- Log Level: {LOG_LEVEL}")
+    print(f"- Access Log: {ENABLE_ACCESS_LOG}")
+    
     uvicorn.run(
         app, 
-        host="0.0.0.0", 
-        port=5681,
-        log_level="info"
+        host=API_HOST, 
+        port=API_PORT,
+        workers=API_WORKERS,
+        reload=API_RELOAD,
+        log_level=LOG_LEVEL,
+        access_log=ENABLE_ACCESS_LOG
     )

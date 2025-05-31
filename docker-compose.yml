@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    container_name: ${DOCKER_CONTAINER_NAME:-youtube-transcript-api}
+    ports:
+      - "${API_PORT:-5681}:${API_PORT:-5681}"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - MAX_WORKERS=${MAX_WORKERS:-30}
+      - INITIAL_RATE=${INITIAL_RATE:-30}
+      - MIN_RATE=${MIN_RATE:-5}
+      - MAX_RATE=${MAX_RATE:-50}
+      - BACKOFF_FACTOR=${BACKOFF_FACTOR:-1.5}
+      - RECOVERY_FACTOR=${RECOVERY_FACTOR:-0.8}
+      - MAX_CONSECUTIVE_FAILURES=${MAX_CONSECUTIVE_FAILURES:-5}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENABLE_ACCESS_LOG=${ENABLE_ACCESS_LOG:-true}
+    restart: ${DOCKER_RESTART_POLICY:-unless-stopped}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT:-5681}/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-30}s
+      timeout: ${HEALTH_CHECK_TIMEOUT:-10}s
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-40}s

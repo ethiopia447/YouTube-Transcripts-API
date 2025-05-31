@@ -1,277 +1,223 @@
-# YouTube Transcript API - Async Version
+# YouTube Transcript API
 
-A fast, async-powered YouTube transcript fetcher with concurrent processing and FastAPI endpoints.
+A high-performance, asynchronous API for fetching YouTube video transcripts with advanced rate limiting and IP protection mechanisms.
 
-## 🚀 Features
+## Features
 
-- **Async Processing**: Handle multiple requests simultaneously
-- **10x+ Performance**: Concurrent transcript fetching
-- **FastAPI Integration**: RESTful API with automatic documentation
-- **Batch Processing**: Process up to 50 videos at once
-- **Auto-translation**: Automatic translation to target languages
-- **Error Handling**: Robust error handling and fallbacks
-- **Multiple Interfaces**: CLI, Python API, and REST API
+- 🚀 Asynchronous processing with concurrent request handling
+- 🔄 Adaptive rate limiting with exponential backoff
+- 🌐 Multiple language support
+- 📦 Docker containerization
+- 🔒 IP protection mechanisms
+- 📊 Real-time statistics and monitoring
+- 🏥 Health check endpoints
+- 📝 Comprehensive API documentation
 
-## 📁 Project Structure
+## Quick Start
 
-```
-YouTube Transcripts API/
-├── async_transcript_service.py    # Core async service
-├── async_transcript_fetcher.py    # CLI interface
-├── fastapi_server.py             # REST API server
-├── performance_test.py           # Performance comparison
-├── api_test_client.py            # API testing script
-├── transcript_fetcher.py         # Original sync version
-├── requirements.txt              # Dependencies
-└── README.md                     # This file
+### Using Docker (Recommended)
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/devtitus/YouTube-Transcripts-API.git
+cd youtube-transcript-api
 ```
 
-## 🛠️ Installation
+2. Create environment configuration:
 
-1. **Install dependencies**:
-
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-2. **Verify installation**:
-   ```powershell
-   python -c "import youtube_transcript_api; print('✅ Installation successful')"
-   ```
-
-## 🎯 Usage
-
-### 1. CLI Interface (Interactive)
-
-Run the async CLI version:
-
-```powershell
-python async_transcript_fetcher.py
+```bash
+cp .env.example .env
+# Edit .env with your preferred settings
 ```
 
-Choose from:
+3. Start the service:
 
-- **Single video**: Process one video
-- **Batch mode**: Process multiple videos concurrently
-- **Demo mode**: Test with sample videos
+```bash
+docker-compose up -d
+```
 
-### 2. FastAPI Server
+The API will be available at `http://localhost:5681`
 
-Start the API server:
+### Manual Installation
 
-```powershell
+1. Create and activate a virtual environment:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+```
+
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Create environment configuration:
+
+```bash
+cp .env.example .env
+# Edit .env with your preferred settings
+```
+
+4. Start the server:
+
+```bash
 python fastapi_server.py
 ```
 
-The API will be available at:
+## Environment Configuration
 
-- **API Base**: http://localhost:8000
-- **Interactive Docs**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+Create a `.env` file in the project root with the following structure:
 
-### 3. API Endpoints
+```ini
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=5681
+API_WORKERS=4
+API_RELOAD=false
 
-#### Single Transcript (POST)
+# Rate Limiting Configuration
+MAX_WORKERS=20
+INITIAL_RATE=20
+MIN_RATE=5
+MAX_RATE=30
+BACKOFF_FACTOR=1.5
+RECOVERY_FACTOR=0.8
+MAX_CONSECUTIVE_FAILURES=3
 
-```bash
-curl -X POST "http://localhost:8000/transcript" \
-     -H "Content-Type: application/json" \
-     -d '{"video_id": "dQw4w9WgXcQ", "language": "en"}'
+# CORS Configuration
+CORS_ORIGINS=["*"]
+CORS_METHODS=["GET", "POST", "OPTIONS"]
+CORS_HEADERS=["*"]
+
+# Logging Configuration
+LOG_LEVEL=info
+ENABLE_ACCESS_LOG=true
+
+# Health Check Configuration
+HEALTH_CHECK_INTERVAL=30
+HEALTH_CHECK_TIMEOUT=10
+HEALTH_CHECK_RETRIES=3
+HEALTH_CHECK_START_PERIOD=40
+
+# Docker Configuration
+DOCKER_CONTAINER_NAME=youtube-transcript-api
+DOCKER_RESTART_POLICY=unless-stopped
 ```
 
-#### Batch Processing (POST)
+## API Endpoints
 
-```bash
-curl -X POST "http://localhost:8000/transcripts/batch" \
-     -H "Content-Type: application/json" \
-     -d '{"video_ids": ["dQw4w9WgXcQ", "jNQXAC9IVRw"], "language": "en"}'
-```
+### Single Transcript
 
-#### Query Parameter Endpoint (GET)
+```http
+POST /transcript
+Content-Type: application/json
 
-```bash
-curl "http://localhost:8000/transcript?video_id=dQw4w9WgXcQ&language=en"
-```
-
-#### Text-Only Transcript (GET)
-
-```bash
-# Option 1: Using format parameter
-curl "http://localhost:8000/transcript?video_id=dQw4w9WgXcQ&format=text"
-
-# Option 2: Using dedicated endpoint
-curl "http://localhost:8000/transcript/text?video_id=dQw4w9WgXcQ"
-```
-
-### 4. Python API
-
-```python
-import asyncio
-from async_transcript_service import AsyncTranscriptService
-
-async def main():
-    service = AsyncTranscriptService(max_workers=10)
-
-    # Single video
-    result = await service.get_transcript_async("dQw4w9WgXcQ")
-    print(f"Status: {result.status}")
-
-    # Multiple videos (concurrent)
-    video_ids = ["dQw4w9WgXcQ", "jNQXAC9IVRw", "kJQP7kiw5Fk"]
-    results = await service.get_multiple_transcripts(video_ids)
-
-    for result in results:
-        print(f"{result.video_id}: {result.status}")
-
-    service.close()
-
-asyncio.run(main())
-```
-
-## 📊 Performance Testing
-
-Run the performance comparison:
-
-```powershell
-python performance_test.py
-```
-
-This will compare sync vs async performance and show the speedup.
-
-## 🧪 API Testing
-
-Test the API endpoints:
-
-```powershell
-# Start the server first
-python fastapi_server.py
-
-# Then in another terminal
-python api_test_client.py
-```
-
-## 🔧 Configuration
-
-### AsyncTranscriptService Parameters
-
-- `max_workers`: Number of concurrent workers (default: 10)
-
-### API Limits
-
-- Batch processing: Maximum 50 videos per request
-- Concurrent workers: Configurable (default: 20 for API)
-
-## 📈 Performance Improvements
-
-### Before (Synchronous)
-
-- Process videos one by one
-- 10 videos × 2s each = 20 seconds
-
-### After (Asynchronous)
-
-- Process videos concurrently
-- 10 videos simultaneously = ~2-3 seconds
-- **7-10x faster!** 🚀
-
-## 🛡️ Error Handling
-
-The service handles various error cases:
-
-- **No transcripts found**: Returns appropriate error message
-- **Transcripts disabled**: Handles disabled transcripts
-- **Translation failures**: Falls back to original transcript
-- **API rate limits**: Respects YouTube's API limits
-- **Network errors**: Proper timeout and retry handling
-- **"No element found" errors**: Automatic retry mechanism (up to 3 attempts)
-
-### Retry Mechanism
-
-The service includes an automatic retry mechanism that helps with intermittent YouTube API issues:
-
-- Retries on "no element found" errors that commonly occur on first requests
-- Configurable retry count (default: up to 3 attempts - original + 2 retries)
-- Small delay between retry attempts for better reliability
-- Works across all endpoints including batch processing
-
-## 📝 API Response Format
-
-```json
 {
-  "video_id": "dQw4w9WgXcQ",
-  "status": "success",
-  "language": "English",
-  "language_code": "en",
-  "is_generated": false,
-  "is_translatable": true,
-  "transcript": [
-    {
-      "start": 0.0,
-      "text": "We're no strangers to love",
-      "duration": 3.5
-    }
-  ],
-  "error": null,
-  "processing_time": 1.23
+    "video_id": "dQw4w9WgXcQ",
+    "language": "en"
 }
 ```
 
-## 🔄 Migration from Sync Version
+### Batch Transcripts
 
-Your original `transcript_fetcher.py` is preserved. The new async version:
+```http
+POST /transcripts/batch
+Content-Type: application/json
 
-1. Uses the same core logic
-2. Adds concurrent processing
-3. Provides better error handling
-4. Includes API endpoints
+{
+    "video_ids": ["dQw4w9WgXcQ", "another_video_id"],
+    "language": "en"
+}
+```
 
-## 🚀 Production Deployment
+### Text-Only Transcript
 
-For production use:
+```http
+GET /transcript/text?video_id=dQw4w9WgXcQ&language=en
+```
 
-1. Configure CORS properly in `fastapi_server.py`
-2. Add authentication if needed
-3. Set up proper logging
-4. Use a production ASGI server like Gunicorn
-5. Add rate limiting
-6. Monitor performance and adjust `max_workers`
+### Health Check
 
-## 🐛 Troubleshooting
+```http
+GET /health
+```
 
-### Common Issues
+### Statistics
 
-1. **"No module named 'async_transcript_service'"**
+```http
+GET /stats
+```
 
-   - Make sure you're in the correct directory
-   - All files should be in the same folder
+## Rate Limiting
 
-2. **"Connection refused" when testing API**
+The API implements adaptive rate limiting with the following features:
 
-   - Start the FastAPI server first: `python fastapi_server.py`
-   - Check if port 8000 is available
+- Dynamic rate adjustment based on success/failure patterns
+- Exponential backoff for failed requests
+- Concurrent request management
+- Automatic recovery mechanisms
 
-3. **"No transcripts found"**
+## Docker Support
 
-   - Video might not have transcripts
-   - Try with a popular video (like the demo videos)
+### Building the Image
 
-4. **Slow performance**
-   - Increase `max_workers` for more concurrency
-   - Check your internet connection
+```bash
+docker build -t youtube-transcript-api .
+```
 
-## 📚 Dependencies
+### Running with Docker Compose
 
-- `fastapi`: Web framework for the API
-- `uvicorn`: ASGI server for FastAPI
-- `youtube-transcript-api`: Core transcript fetching
-- `pydantic`: Data validation and settings
-- `python-multipart`: File upload support
+```bash
+docker-compose up -d
+```
 
-## 🎉 Next Steps
+### Viewing Logs
 
-1. **Run performance test**: See the speed improvement
-2. **Try the CLI**: Test single and batch modes
-3. **Start the API**: Access the interactive docs
-4. **Test with your videos**: Use your own YouTube video IDs
+```bash
+docker-compose logs -f
+```
 
-Happy transcript fetching! 🎬✨
+## Development
+
+### Running Tests
+
+```bash
+pytest
+```
+
+### Code Style
+
+```bash
+black .
+flake8
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- [youtube-transcript-api](https://pypi.org/project/youtube-transcript-api/) for the base transcript functionality
+- FastAPI for the web framework
+- Docker for containerization
+
+## Support
+
+For support, please open an issue in the GitHub repository or contact the maintainers.
+
+---
+
+**Note**: This API is designed to respect YouTube's terms of service and implements rate limiting to prevent IP flagging. Please use responsibly.
