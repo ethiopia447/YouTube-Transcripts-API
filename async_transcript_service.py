@@ -5,6 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from youtube_transcript_api._api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 from dataclasses import dataclass
+import random
+import math
+from collections import deque
+from datetime import datetime, timedelta
 
 @dataclass
 class TranscriptResult:
@@ -41,50 +45,209 @@ class TranscriptResult:
                     self.error = f"Failed to process transcript format: {e}"
                 self.transcript = None
 
+class AdaptiveRateLimiter:
+    def __init__(
+        self,
+        initial_rate: int = 30,
+        min_rate: int = 5,
+        max_rate: int = 50,
+        window_size: int = 60,
+        backoff_factor: float = 1.5,
+        recovery_factor: float = 0.8,
+        max_consecutive_failures: int = 5
+    ):
+        self.initial_rate = initial_rate
+        self.min_rate = min_rate
+        self.max_rate = max_rate
+        self.window_size = window_size
+        self.backoff_factor = backoff_factor
+        self.recovery_factor = recovery_factor
+        self.max_consecutive_failures = max_consecutive_failures
+        
+        # Request tracking
+        self.request_timestamps = deque(maxlen=1000)  # Store last 1000 requests
+        self.success_timestamps = deque(maxlen=1000)  # Store last 1000 successes
+        self.failure_timestamps = deque(maxlen=1000)  # Store last 1000 failures
+        
+        # State tracking
+        self.current_rate = initial_rate
+        self.consecutive_failures = 0
+        self.consecutive_successes = 0
+        self.last_failure_time = None
+        self.last_success_time = None
+        self.lock = asyncio.Lock()
+        
+        # Performance metrics
+        self.total_requests = 0
+        self.total_successes = 0
+        self.total_failures = 0
+        
+    def _calculate_dynamic_rate(self) -> int:
+        """Calculate the current rate limit based on recent performance"""
+        now = time.time()
+        window_start = now - self.window_size
+        
+        # Count recent requests
+        recent_requests = sum(1 for ts in self.request_timestamps if ts > window_start)
+        recent_successes = sum(1 for ts in self.success_timestamps if ts > window_start)
+        recent_failures = sum(1 for ts in self.failure_timestamps if ts > window_start)
+        
+        # Calculate success rate
+        success_rate = recent_successes / max(1, recent_requests)
+        
+        # Base rate on success rate
+        if success_rate > 0.95:  # Very high success rate
+            target_rate = min(self.max_rate, int(self.current_rate * 1.2))
+        elif success_rate > 0.8:  # Good success rate
+            target_rate = min(self.max_rate, int(self.current_rate * 1.1))
+        elif success_rate < 0.5:  # Poor success rate
+            target_rate = max(self.min_rate, int(self.current_rate * 0.7))
+        else:  # Moderate success rate
+            target_rate = self.current_rate
+            
+        return target_rate
+    
+    def _calculate_backoff_time(self) -> float:
+        """Calculate backoff time using exponential backoff with jitter"""
+        base_delay = self.backoff_factor ** self.consecutive_failures
+        jitter = random.uniform(0, 0.1 * base_delay)  # 10% jitter
+        return base_delay + jitter
+    
+    async def acquire(self):
+        """Acquire permission to make a request with adaptive rate limiting"""
+        async with self.lock:
+            now = time.time()
+            
+            # Update current rate based on recent performance
+            self.current_rate = self._calculate_dynamic_rate()
+            
+            # Calculate time window
+            window_start = now - self.window_size
+            recent_requests = [ts for ts in self.request_timestamps if ts > window_start]
+            
+            if len(recent_requests) >= self.current_rate:
+                # Calculate wait time
+                oldest_request = recent_requests[0]
+                wait_time = self.window_size - (now - oldest_request)
+                
+                if wait_time > 0:
+                    # Add jitter to prevent thundering herd
+                    jitter = random.uniform(0, 0.1 * wait_time)
+                    wait_time += jitter
+                    
+                    # Apply additional backoff if we've had recent failures
+                    if self.consecutive_failures > 0:
+                        wait_time *= self._calculate_backoff_time()
+                    
+                    await asyncio.sleep(wait_time)
+            
+            self.request_timestamps.append(now)
+            self.total_requests += 1
+    
+    def record_success(self):
+        """Record a successful request"""
+        now = time.time()
+        self.success_timestamps.append(now)
+        self.last_success_time = now
+        self.consecutive_successes += 1
+        self.consecutive_failures = 0
+        self.total_successes += 1
+        
+        # Gradually increase rate on success
+        if self.consecutive_successes >= 3:
+            self.current_rate = min(self.max_rate, int(self.current_rate * self.recovery_factor))
+    
+    def record_failure(self):
+        """Record a failed request"""
+        now = time.time()
+        self.failure_timestamps.append(now)
+        self.last_failure_time = now
+        self.consecutive_failures += 1
+        self.consecutive_successes = 0
+        self.total_failures += 1
+        
+        # Aggressively reduce rate on failure
+        if self.consecutive_failures >= self.max_consecutive_failures:
+            self.current_rate = max(self.min_rate, int(self.current_rate * 0.5))
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get current rate limiter statistics"""
+        return {
+            "current_rate": self.current_rate,
+            "consecutive_failures": self.consecutive_failures,
+            "consecutive_successes": self.consecutive_successes,
+            "total_requests": self.total_requests,
+            "total_successes": self.total_successes,
+            "total_failures": self.total_failures,
+            "success_rate": self.total_successes / max(1, self.total_requests)
+        }
+
 class AsyncTranscriptService:
-    def __init__(self, max_workers: int = 10):
+    def __init__(
+        self,
+        max_workers: int = 30,
+        initial_rate: int = 30,
+        min_rate: int = 5,
+        max_rate: int = 50
+    ):
         """
-        Initialize the async transcript service
+        Initialize the async transcript service with adaptive rate limiting
         
         Args:
             max_workers: Maximum number of concurrent transcript fetches
+            initial_rate: Initial requests per minute
+            min_rate: Minimum requests per minute
+            max_rate: Maximum requests per minute
         """
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.rate_limiter = AdaptiveRateLimiter(
+            initial_rate=initial_rate,
+            min_rate=min_rate,
+            max_rate=max_rate
+        )
     
-    async def get_transcript_async(self, video_id: str, target_language: str = "en", retry_count: int = 1) -> TranscriptResult:
+    async def get_transcript_async(self, video_id: str, target_language: str = "en", retry_count: int = 2) -> TranscriptResult:
         """
-        Async wrapper for getting transcript with your existing logic
-        
-        Args:
-            video_id: YouTube video ID
-            target_language: Preferred language code (default: 'en')
-            retry_count: Number of retry attempts for transient errors (default: 1)
+        Async wrapper for getting transcript with adaptive rate limiting and backoff
         """
         start_time = time.time()
         loop = asyncio.get_event_loop()
         
-        result = await loop.run_in_executor(
-            self.executor, 
-            self._get_transcript_sync, 
-            video_id, 
-            target_language
-        )
+        # Apply rate limiting
+        await self.rate_limiter.acquire()
         
-        # Handle "no element found" error with retries
-        if (result.status == "error" and 
-            "no element found" in str(result.error) and 
-            retry_count > 0):
-            # Add a small delay before retrying
-            await asyncio.sleep(0.5)
-            print(f"Retrying transcript fetch for {video_id}, attempts left: {retry_count}")
-            result = await self.get_transcript_async(
+        try:
+            result = await loop.run_in_executor(
+                self.executor, 
+                self._get_transcript_sync, 
                 video_id, 
-                target_language, 
-                retry_count - 1
+                target_language
             )
-        
-        result.processing_time = time.time() - start_time
-        return result
+            
+            # Record success
+            self.rate_limiter.record_success()
+            
+            # Handle "no element found" error with adaptive backoff
+            if (result.status == "error" and 
+                "no element found" in str(result.error) and 
+                retry_count > 0):
+                # Calculate adaptive backoff time
+                backoff_time = self.rate_limiter._calculate_backoff_time()
+                await asyncio.sleep(backoff_time)
+                print(f"Retrying transcript fetch for {video_id}, attempts left: {retry_count}")
+                result = await self.get_transcript_async(
+                    video_id, 
+                    target_language, 
+                    retry_count - 1
+                )
+            
+            result.processing_time = time.time() - start_time
+            return result
+            
+        except Exception as e:
+            # Record failure
+            self.rate_limiter.record_failure()
+            raise e
         
     def _get_transcript_sync(self, video_id: str, target_language: str = "en") -> TranscriptResult:
         """

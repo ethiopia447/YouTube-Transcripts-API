@@ -15,8 +15,14 @@ transcript_service = None
 async def lifespan(app: FastAPI):
     # Startup
     global transcript_service
-    transcript_service = AsyncTranscriptService(max_workers=20)
-    print("🚀 Transcript service initialized")
+    # Initialize with adaptive rate limiting
+    transcript_service = AsyncTranscriptService(
+        max_workers=30,
+        initial_rate=30,
+        min_rate=5,
+        max_rate=50
+    )
+    print("🚀 Transcript service initialized with adaptive rate limiting")
     yield
     # Shutdown
     if transcript_service:
@@ -294,6 +300,14 @@ async def get_transcript_text_only(video_id: str, language: str = "en"):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/stats")
+async def get_rate_limiter_stats():
+    """Get current rate limiter statistics"""
+    if not transcript_service:
+        raise HTTPException(status_code=503, detail="Service not available")
+    
+    return transcript_service.rate_limiter.get_stats()
 
 if __name__ == "__main__":
     import uvicorn
