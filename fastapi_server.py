@@ -306,26 +306,67 @@ async def get_transcript_text_only(video_id: str, language: str = "en"):
         raise HTTPException(status_code=503, detail="Service not available")
     
     try:
+        print(f"Processing text-only transcript request for video_id={video_id}, language={language}")
+        
         # Use retry logic (3 attempts) to handle intermittent "no element found" errors
         result = await transcript_service.get_transcript_async(video_id, language, retry_count=2)
         
-        if result.status != "success" or not result.transcript:
+        # Handle error cases
+        if result.status != "success":
+            print(f"Error fetching transcript for {video_id}: {result.error}")
             return {
                 "video_id": video_id,
                 "language": result.language,
                 "text": "",
-                "error": result.error or "No transcript available"
+                "error": result.error or "Failed to fetch transcript"
+            }
+            
+        # Handle missing transcript data
+        if not result.transcript:
+            print(f"No transcript data available for {video_id}")
+            return {
+                "video_id": video_id,
+                "language": result.language,
+                "text": "",
+                "error": "No transcript data available"
             }
         
-        # Extract and join all text entries into a single string
-        full_text = " ".join([entry.get("text", "") for entry in result.transcript])
-        
-        return {
-            "video_id": video_id,
-            "language": result.language,
-            "text": full_text
-        }
+        try:
+            # Print transcript data type and length for debugging
+            print(f"Transcript data for {video_id}: type={type(result.transcript)}, length={len(result.transcript)}")
+            
+            # Extract and join all text entries into a single string
+            full_text = " ".join([entry.get("text", "") for entry in result.transcript if entry and isinstance(entry, dict)])
+            
+            if not full_text.strip():
+                print(f"Empty transcript text for {video_id}")
+                return {
+                    "video_id": video_id,
+                    "language": result.language,
+                    "text": "",
+                    "error": "Transcript is empty"
+                }
+            
+            print(f"Successfully processed transcript for {video_id}: {len(full_text)} characters")
+            return {
+                "video_id": video_id,
+                "language": result.language,
+                "text": full_text
+            }
+        except Exception as e:
+            print(f"Error processing transcript for {video_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "video_id": video_id,
+                "language": result.language,
+                "text": "",
+                "error": f"Error processing transcript: {str(e)}"
+            }
     except Exception as e:
+        print(f"Server error processing {video_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/stats")
@@ -335,6 +376,22 @@ async def get_rate_limiter_stats():
         raise HTTPException(status_code=503, detail="Service not available")
     
     return transcript_service.rate_limiter.get_stats()
+
+@app.get("/transcripts/text/")
+@app.get("/transcripts/text")
+async def get_transcript_text_plural(video_id: str, language: str = "en"):
+    """
+    Alias for /transcript/text endpoint - handles the plural form of the URL
+    
+    - **video_id**: YouTube video ID (as query parameter)
+    - **language**: Target language code (query parameter)
+    
+    Example: /transcripts/text?video_id=MbAojJGuds4&language=en
+    
+    Returns: {"video_id": "...", "language": "...", "text": "Full transcript text..."}
+    """
+    # Just call the existing function
+    return await get_transcript_text_only(video_id, language)
 
 if __name__ == "__main__":
     import uvicorn

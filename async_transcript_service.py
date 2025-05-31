@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import time
 from typing import List, Dict, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -29,16 +29,27 @@ class TranscriptResult:
                 # Convert each entry to a standard dictionary
                 processed_transcript = []
                 for entry in self.transcript:
-                    if isinstance(entry, dict):
-                        processed_transcript.append(entry)
-                    else:
-                        # Convert objects like FetchedTranscriptSnippet to dicts
-                        processed_transcript.append({
-                            "text": getattr(entry, "text", ""),
-                            "start": getattr(entry, "start", 0.0),
-                            "duration": getattr(entry, "duration", 0.0)
-                        })
-                self.transcript = processed_transcript
+                    try:
+                        if isinstance(entry, dict):
+                            processed_transcript.append(entry)
+                        else:
+                            # Convert objects like FetchedTranscriptSnippet to dicts
+                            processed_transcript.append({
+                                "text": getattr(entry, "text", ""),
+                                "start": getattr(entry, "start", 0.0),
+                                "duration": getattr(entry, "duration", 0.0)
+                            })
+                    except Exception as e:
+                        print(f"Warning: Failed to process transcript entry in post_init: {e}")
+                        continue
+                
+                # Only update transcript if we have valid entries
+                if processed_transcript:
+                    self.transcript = processed_transcript
+                else:
+                    self.transcript = None
+                    if not self.error:
+                        self.error = "No valid transcript entries found after processing"
             except Exception as e:
                 # Failed to convert, set to None and add error
                 if not self.error:
@@ -120,13 +131,12 @@ class AdaptiveRateLimiter:
             
             # Update current rate based on recent performance
             self.current_rate = self._calculate_dynamic_rate()
-            
-            # Calculate time window
+              # Calculate time window
             window_start = now - self.window_size
             recent_requests = [ts for ts in self.request_timestamps if ts > window_start]
             
-            if len(recent_requests) >= self.current_rate:
-                # Calculate wait time
+            if len(recent_requests) >= self.current_rate and recent_requests:
+                # Calculate wait time - add safety check for empty list
                 oldest_request = recent_requests[0]
                 wait_time = self.window_size - (now - oldest_request)
                 
@@ -188,7 +198,8 @@ class AsyncTranscriptService:
         max_workers: int = 30,
         initial_rate: int = 30,
         min_rate: int = 5,
-        max_rate: int = 50
+        max_rate: int = 50,
+        request_timeout: float = 10.0  # Add timeout support
     ):
         """
         Initialize the async transcript service with adaptive rate limiting
@@ -198,30 +209,51 @@ class AsyncTranscriptService:
             initial_rate: Initial requests per minute
             min_rate: Minimum requests per minute
             max_rate: Maximum requests per minute
+            request_timeout: Timeout for individual requests in seconds
         """
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.request_timeout = request_timeout
         self.rate_limiter = AdaptiveRateLimiter(
             initial_rate=initial_rate,
             min_rate=min_rate,
             max_rate=max_rate
         )
+        # Cache for recent successful requests to avoid duplicate API calls
+        self._cache = {}
+        self._cache_timeout = 300  # 5 minutes cache
     
     async def get_transcript_async(self, video_id: str, target_language: str = "en", retry_count: int = 2) -> TranscriptResult:
         """
-        Async wrapper for getting transcript with adaptive rate limiting and backoff
+        Async wrapper for getting transcript with adaptive rate limiting, timeout, and caching
         """
         start_time = time.time()
+        
+        # Check cache first
+        cache_key = f"{video_id}:{target_language}"
+        now = time.time()
+        if cache_key in self._cache:
+            cached_result, cache_time = self._cache[cache_key]
+            if now - cache_time < self._cache_timeout:
+                print(f"Cache hit for {video_id}")
+                # Return cached result but update processing time
+                cached_result.processing_time = time.time() - start_time
+                return cached_result
+        
         loop = asyncio.get_event_loop()
         
         # Apply rate limiting
         await self.rate_limiter.acquire()
         
         try:
-            result = await loop.run_in_executor(
-                self.executor, 
-                self._get_transcript_sync, 
-                video_id, 
-                target_language
+            # Add timeout to prevent hanging requests
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    self.executor, 
+                    self._get_transcript_sync, 
+                    video_id, 
+                    target_language
+                ),
+                timeout=self.request_timeout
             )
             
             # Record success
@@ -232,7 +264,7 @@ class AsyncTranscriptService:
                 "no element found" in str(result.error) and 
                 retry_count > 0):
                 # Calculate adaptive backoff time
-                backoff_time = self.rate_limiter._calculate_backoff_time()
+                backoff_time = min(self.rate_limiter._calculate_backoff_time(), 2.0)  # Cap at 2 seconds
                 await asyncio.sleep(backoff_time)
                 print(f"Retrying transcript fetch for {video_id}, attempts left: {retry_count}")
                 result = await self.get_transcript_async(
@@ -242,21 +274,47 @@ class AsyncTranscriptService:
                 )
             
             result.processing_time = time.time() - start_time
+              # Cache successful results
+            if result.status == "success":
+                self._cache[cache_key] = (result, now)
+                # Clean old cache entries
+                self._clean_cache()
+            
             return result
             
+        except asyncio.TimeoutError:
+            # Record failure
+            self.rate_limiter.record_failure()
+            return TranscriptResult(
+                video_id=video_id,
+                status="error",
+                error=f"Request timeout after {self.request_timeout} seconds",
+                processing_time=time.time() - start_time
+            )
         except Exception as e:
             # Record failure
             self.rate_limiter.record_failure()
-            raise e
-        
+            return TranscriptResult(
+                video_id=video_id,
+                status="error",
+                error=f"Unexpected error: {str(e)}",
+                processing_time=time.time() - start_time
+            )
+    
     def _get_transcript_sync(self, video_id: str, target_language: str = "en") -> TranscriptResult:
         """
-        Optimized transcript fetching logic
+        Optimized transcript fetching logic with proper list index error handling
         """
         try:
             # First try direct method for speed
             try:
                 transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[target_language])
+                if not transcript or not isinstance(transcript, list):
+                    return TranscriptResult(
+                        video_id=video_id,
+                        status="error",
+                        error="Invalid transcript format received"
+                    )
                 return TranscriptResult(
                     video_id=video_id,
                     status="success",
@@ -289,15 +347,35 @@ class AsyncTranscriptService:
             if target_transcript:
                 try:
                     transcript_data = list(target_transcript.fetch())
+                    if not transcript_data or not isinstance(transcript_data, list):
+                        return TranscriptResult(
+                            video_id=video_id,
+                            status="error",
+                            error=f"Invalid transcript data format for {target_language}"
+                        )
                     # Convert FetchedTranscriptSnippet objects to dicts
-                    transcript_dicts = [
-                        {
-                            "text": getattr(entry, "text", ""),
-                            "start": getattr(entry, "start", 0.0),
-                            "duration": getattr(entry, "duration", 0.0)
-                        } if not isinstance(entry, dict) else entry
-                        for entry in transcript_data
-                    ]
+                    transcript_dicts = []
+                    for entry in transcript_data:
+                        if isinstance(entry, dict):
+                            transcript_dicts.append(entry)
+                        else:
+                            try:
+                                transcript_dicts.append({
+                                    "text": getattr(entry, "text", ""),
+                                    "start": getattr(entry, "start", 0.0),
+                                    "duration": getattr(entry, "duration", 0.0)
+                                })
+                            except Exception as e:
+                                print(f"Warning: Failed to process transcript entry: {e}")
+                                continue
+                    
+                    if not transcript_dicts:
+                        return TranscriptResult(
+                            video_id=video_id,
+                            status="error",
+                            error=f"No valid transcript entries found for {target_language}"
+                        )
+                    
                     return TranscriptResult(
                         video_id=video_id,
                         status="success",
@@ -326,21 +404,75 @@ class AsyncTranscriptService:
                 try:
                     # First fetch original for fallback
                     original_data = list(translatable_transcript.fetch())
+                    if not original_data or not isinstance(original_data, list):
+                        return TranscriptResult(
+                            video_id=video_id,
+                            status="error",
+                            error="Invalid original transcript data format"
+                        )
                     
                     # Try to translate
                     try:
                         translated = translatable_transcript.translate(target_language)
                         translated_data = list(translated.fetch())
+                        if not translated_data or not isinstance(translated_data, list):
+                            # Use original data if translation is empty
+                            transcript_dicts = []
+                            for entry in original_data:
+                                if isinstance(entry, dict):
+                                    transcript_dicts.append(entry)
+                                else:
+                                    try:
+                                        transcript_dicts.append({
+                                            "text": getattr(entry, "text", ""),
+                                            "start": getattr(entry, "start", 0.0),
+                                            "duration": getattr(entry, "duration", 0.0)
+                                        })
+                                    except Exception as e:
+                                        print(f"Warning: Failed to process original transcript entry: {e}")
+                                        continue
+                            
+                            if not transcript_dicts:
+                                return TranscriptResult(
+                                    video_id=video_id,
+                                    status="error",
+                                    error="No valid transcript entries found in original language"
+                                )
+                            
+                            return TranscriptResult(
+                                video_id=video_id,
+                                status="success",
+                                language=translatable_transcript.language,
+                                language_code=translatable_transcript.language_code,
+                                is_generated=translatable_transcript.is_generated,
+                                is_translatable=True,
+                                transcript=transcript_dicts,
+                                error="Translation returned empty data. Using original transcript."
+                            )
                         
                         # Convert FetchedTranscriptSnippet objects to dicts
-                        translated_dicts = [
-                            {
-                                "text": getattr(entry, "text", ""),
-                                "start": getattr(entry, "start", 0.0),
-                                "duration": getattr(entry, "duration", 0.0)
-                            } if not isinstance(entry, dict) else entry
-                            for entry in translated_data
-                        ]
+                        translated_dicts = []
+                        for entry in translated_data:
+                            if isinstance(entry, dict):
+                                translated_dicts.append(entry)
+                            else:
+                                try:
+                                    translated_dicts.append({
+                                        "text": getattr(entry, "text", ""),
+                                        "start": getattr(entry, "start", 0.0),
+                                        "duration": getattr(entry, "duration", 0.0)
+                                    })
+                                except Exception as e:
+                                    print(f"Warning: Failed to process translated transcript entry: {e}")
+                                    continue
+                        
+                        if not translated_dicts:
+                            return TranscriptResult(
+                                video_id=video_id,
+                                status="error",
+                                error="No valid transcript entries found in translation"
+                            )
+                        
                         return TranscriptResult(
                             video_id=video_id,
                             status="success",
@@ -352,6 +484,28 @@ class AsyncTranscriptService:
                         )
                     except Exception as e:
                         # Translation failed, use original
+                        transcript_dicts = []
+                        for entry in original_data:
+                            if isinstance(entry, dict):
+                                transcript_dicts.append(entry)
+                            else:
+                                try:
+                                    transcript_dicts.append({
+                                        "text": getattr(entry, "text", ""),
+                                        "start": getattr(entry, "start", 0.0),
+                                        "duration": getattr(entry, "duration", 0.0)
+                                    })
+                                except Exception as e:
+                                    print(f"Warning: Failed to process original transcript entry: {e}")
+                                    continue
+                        
+                        if not transcript_dicts:
+                            return TranscriptResult(
+                                video_id=video_id,
+                                status="error",
+                                error="No valid transcript entries found in original language"
+                            )
+                        
                         return TranscriptResult(
                             video_id=video_id,
                             status="success",
@@ -359,14 +513,7 @@ class AsyncTranscriptService:
                             language_code=translatable_transcript.language_code,
                             is_generated=translatable_transcript.is_generated,
                             is_translatable=True,
-                            transcript=[
-                                {
-                                    "text": getattr(entry, "text", ""),
-                                    "start": getattr(entry, "start", 0.0),
-                                    "duration": getattr(entry, "duration", 0.0)
-                                } if not isinstance(entry, dict) else entry
-                                for entry in original_data
-                            ],
+                            transcript=transcript_dicts,
                             error=f"Translation failed: {e}. Using original transcript."
                         )
                 except Exception as e:
@@ -376,18 +523,46 @@ class AsyncTranscriptService:
                         error=f"Error fetching transcript: {e}"
                     )
             
-            # Fall back to first available transcript
+            # Fall back to first available transcript - THIS IS WHERE THE LIST INDEX ERROR LIKELY OCCURS
             try:
-                selected_transcript = transcripts[0]
+                if not transcripts or len(transcripts) == 0:  # FIXED: Check both conditions
+                    return TranscriptResult(
+                        video_id=video_id,
+                        status="error",
+                        error="No transcripts available"
+                    )
+                    
+                selected_transcript = transcripts[0]  # This was causing list index out of range
                 transcript_data = list(selected_transcript.fetch())
-                transcript_dicts = [
-                    {
-                        "text": getattr(entry, "text", ""),
-                        "start": getattr(entry, "start", 0.0),
-                        "duration": getattr(entry, "duration", 0.0)
-                    } if not isinstance(entry, dict) else entry
-                    for entry in transcript_data
-                ]
+                if not transcript_data or not isinstance(transcript_data, list):
+                    return TranscriptResult(
+                        video_id=video_id,
+                        status="error",
+                        error="Invalid transcript data format"
+                    )
+                    
+                transcript_dicts = []
+                for entry in transcript_data:
+                    if isinstance(entry, dict):
+                        transcript_dicts.append(entry)
+                    else:
+                        try:
+                            transcript_dicts.append({
+                                "text": getattr(entry, "text", ""),
+                                "start": getattr(entry, "start", 0.0),
+                                "duration": getattr(entry, "duration", 0.0)
+                            })
+                        except Exception as e:
+                            print(f"Warning: Failed to process transcript entry: {e}")
+                            continue
+                
+                if not transcript_dicts:
+                    return TranscriptResult(
+                        video_id=video_id,
+                        status="error",
+                        error="No valid transcript entries found"
+                    )
+                
                 return TranscriptResult(
                     video_id=video_id,
                     status="success",
@@ -396,6 +571,12 @@ class AsyncTranscriptService:
                     is_generated=selected_transcript.is_generated,
                     is_translatable=selected_transcript.is_translatable,
                     transcript=transcript_dicts
+                )
+            except IndexError as e:
+                return TranscriptResult(
+                    video_id=video_id,
+                    status="error",
+                    error=f"List index out of range - no transcripts available: {e}"
                 )
             except Exception as e:
                 return TranscriptResult(
@@ -413,9 +594,30 @@ class AsyncTranscriptService:
         except Exception as e:
             return TranscriptResult(
                 video_id=video_id,
-                status="error",
-                error=f"An error occurred: {e}"
+                status="error",                error=f"An error occurred: {e}"
             )
+    
+    def _clean_cache(self):
+        """Remove expired cache entries to prevent memory leaks"""
+        now = time.time()
+        expired_keys = []
+        
+        for key, (result, cache_time) in self._cache.items():
+            if now - cache_time > self._cache_timeout:
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            del self._cache[key]
+        
+        # Optionally limit cache size to prevent unbounded growth
+        max_cache_size = 1000
+        if len(self._cache) > max_cache_size:
+            # Remove oldest entries
+            sorted_items = sorted(self._cache.items(), key=lambda x: x[1][1])
+            items_to_remove = len(self._cache) - max_cache_size
+            for i in range(items_to_remove):
+                key = sorted_items[i][0]
+                del self._cache[key]
     
     async def get_multiple_transcripts(
         self, 
