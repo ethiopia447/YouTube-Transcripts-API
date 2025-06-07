@@ -1,223 +1,139 @@
-# YouTube Transcript API
+# YouTube Transcripts API 🎥📜
 
-A high-performance, asynchronous API for fetching YouTube video transcripts with advanced rate limiting and IP protection mechanisms.
+![YouTube Transcripts API](https://img.shields.io/badge/YouTube%20Transcripts%20API-v1.0-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.8%2B-green.svg)
+![Docker](https://img.shields.io/badge/Docker-Enabled-blue.svg)
+![Async](https://img.shields.io/badge/Async-Enabled-orange.svg)
+
+Welcome to the **YouTube Transcripts API**! This high-performance, asynchronous API allows you to fetch YouTube video transcripts effortlessly. With features like adaptive rate limiting, Docker support, and robust error handling, this API is designed to meet your needs efficiently.
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [API Endpoints](#api-endpoints)
+- [Rate Limiting](#rate-limiting)
+- [Error Handling](#error-handling)
+- [Docker Support](#docker-support)
+- [Contributing](#contributing)
+- [License](#license)
+- [Releases](#releases)
 
 ## Features
 
-- 🚀 Asynchronous processing with concurrent request handling
-- 🔄 Adaptive rate limiting with exponential backoff
-- 🌐 Multiple language support
-- 📦 Docker containerization
-- 🔒 IP protection mechanisms
-- 📊 Real-time statistics and monitoring
-- 🏥 Health check endpoints
-- 📝 Comprehensive API documentation
+- **High Performance**: Built with FastAPI, this API handles multiple requests seamlessly.
+- **Asynchronous**: Designed for efficiency, it uses Python's `asyncio` to manage I/O-bound tasks.
+- **Adaptive Rate Limiting**: Automatically adjusts request limits based on server load.
+- **Robust Error Handling**: Provides meaningful error messages and HTTP status codes.
+- **Docker Support**: Easy to deploy using Docker, ensuring a consistent environment.
 
-## Quick Start
+## Installation
 
-### Using Docker (Recommended)
+To get started with the YouTube Transcripts API, follow these steps:
 
-1. Clone the repository:
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/ethiopia447/YouTube-Transcripts-API.git
+   cd YouTube-Transcripts-API
+   ```
 
-```bash
-git clone https://github.com/devtitus/YouTube-Transcripts-API.git
-cd youtube-transcript-api
-```
+2. **Install Dependencies**:
+   Make sure you have Python 3.8 or higher installed. You can create a virtual environment and install the required packages:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   pip install -r requirements.txt
+   ```
 
-2. Create environment configuration:
+3. **Run the API**:
+   You can start the API using the command:
+   ```bash
+   uvicorn main:app --reload
+   ```
 
-```bash
-cp .env.example .env
-# Edit .env with your preferred settings
-```
+## Usage
 
-3. Start the service:
-
-```bash
-docker-compose up -d
-```
-
-The API will be available at `http://localhost:5681`
-
-### Manual Installation
-
-1. Create and activate a virtual environment:
+After installation, you can access the API at `http://localhost:8000`. Use any HTTP client to make requests. Here’s a quick example using `curl`:
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
+curl -X GET "http://localhost:8000/transcript?video_id=YOUR_VIDEO_ID"
 ```
 
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Create environment configuration:
-
-```bash
-cp .env.example .env
-# Edit .env with your preferred settings
-```
-
-4. Start the server:
-
-```bash
-python fastapi_server.py
-```
-
-## Environment Configuration
-
-Create a `.env` file in the project root with the following structure:
-
-```ini
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=5681
-API_WORKERS=4
-API_RELOAD=false
-
-# Rate Limiting Configuration
-MAX_WORKERS=20
-INITIAL_RATE=20
-MIN_RATE=5
-MAX_RATE=30
-BACKOFF_FACTOR=1.5
-RECOVERY_FACTOR=0.8
-MAX_CONSECUTIVE_FAILURES=3
-
-# CORS Configuration
-CORS_ORIGINS=["*"]
-CORS_METHODS=["GET", "POST", "OPTIONS"]
-CORS_HEADERS=["*"]
-
-# Logging Configuration
-LOG_LEVEL=info
-ENABLE_ACCESS_LOG=true
-
-# Health Check Configuration
-HEALTH_CHECK_INTERVAL=30
-HEALTH_CHECK_TIMEOUT=10
-HEALTH_CHECK_RETRIES=3
-HEALTH_CHECK_START_PERIOD=40
-
-# Docker Configuration
-DOCKER_CONTAINER_NAME=youtube-transcript-api
-DOCKER_RESTART_POLICY=unless-stopped
-```
+Replace `YOUR_VIDEO_ID` with the ID of the YouTube video you want to fetch the transcript for.
 
 ## API Endpoints
 
-### Single Transcript
+### Get Transcript
 
-```http
-POST /transcript
-Content-Type: application/json
+- **Endpoint**: `/transcript`
+- **Method**: `GET`
+- **Query Parameters**:
+  - `video_id`: The ID of the YouTube video.
 
-{
-    "video_id": "dQw4w9WgXcQ",
-    "language": "en"
-}
+**Example**:
+```bash
+GET /transcript?video_id=dQw4w9WgXcQ
 ```
 
-### Batch Transcripts
+### Get Supported Languages
 
-```http
-POST /transcripts/batch
-Content-Type: application/json
+- **Endpoint**: `/languages`
+- **Method**: `GET`
 
-{
-    "video_ids": ["dQw4w9WgXcQ", "another_video_id"],
-    "language": "en"
-}
-```
-
-### Text-Only Transcript
-
-```http
-GET /transcript/text?video_id=dQw4w9WgXcQ&language=en
-```
-
-### Health Check
-
-```http
-GET /health
-```
-
-### Statistics
-
-```http
-GET /stats
-```
+This endpoint returns a list of languages supported by the API for fetching transcripts.
 
 ## Rate Limiting
 
-The API implements adaptive rate limiting with the following features:
+The API implements adaptive rate limiting to optimize performance. If the server experiences high load, it will automatically reduce the number of allowed requests. You will receive a `429 Too Many Requests` status if you exceed the limit. 
 
-- Dynamic rate adjustment based on success/failure patterns
-- Exponential backoff for failed requests
-- Concurrent request management
-- Automatic recovery mechanisms
+## Error Handling
+
+The API provides clear error messages to help you troubleshoot issues. Here are some common responses:
+
+- **400 Bad Request**: The request was invalid. Check your parameters.
+- **404 Not Found**: The requested resource could not be found.
+- **500 Internal Server Error**: An unexpected error occurred on the server.
 
 ## Docker Support
 
-### Building the Image
+You can easily run the YouTube Transcripts API using Docker. Here’s how:
 
-```bash
-docker build -t youtube-transcript-api .
-```
+1. **Build the Docker Image**:
+   ```bash
+   docker build -t youtube-transcripts-api .
+   ```
 
-### Running with Docker Compose
+2. **Run the Docker Container**:
+   ```bash
+   docker run -d -p 8000:8000 youtube-transcripts-api
+   ```
 
-```bash
-docker-compose up -d
-```
-
-### Viewing Logs
-
-```bash
-docker-compose logs -f
-```
-
-## Development
-
-### Running Tests
-
-```bash
-pytest
-```
-
-### Code Style
-
-```bash
-black .
-flake8
-```
+The API will be available at `http://localhost:8000`.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+We welcome contributions to improve the YouTube Transcripts API. To contribute:
+
+1. Fork the repository.
+2. Create a new branch.
+3. Make your changes and commit them.
+4. Push to your fork and create a pull request.
+
+Please ensure that your code follows the existing style and includes tests where applicable.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-## Acknowledgments
+## Releases
 
-- [youtube-transcript-api](https://pypi.org/project/youtube-transcript-api/) for the base transcript functionality
-- FastAPI for the web framework
-- Docker for containerization
+You can find the latest releases of the YouTube Transcripts API [here](https://github.com/ethiopia447/YouTube-Transcripts-API/releases). Download the latest version and follow the installation instructions to get started.
 
-## Support
+## Conclusion
 
-For support, please open an issue in the GitHub repository or contact the maintainers.
+The YouTube Transcripts API offers a reliable and efficient way to fetch transcripts for YouTube videos. With its asynchronous design, adaptive rate limiting, and Docker support, it stands out as a powerful tool for developers. 
 
----
+For any questions or issues, feel free to check the [Releases](https://github.com/ethiopia447/YouTube-Transcripts-API/releases) section or reach out to the community.
 
-**Note**: This API is designed to respect YouTube's terms of service and implements rate limiting to prevent IP flagging. Please use responsibly.
+Happy coding!
